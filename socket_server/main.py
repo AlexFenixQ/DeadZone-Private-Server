@@ -1,9 +1,20 @@
-
 import socket
 import threading
 import logging
 import msgpack
 import serde
+import time
+import json
+import base64
+import player_data
+
+def dict_to_kv_list(d):
+    result = []
+    for k, v in d.items():
+        if isinstance(v, dict):
+            v = dict_to_kv_list(v)
+        result.append([k, v])
+    return result
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("EndpointServer")
@@ -65,10 +76,14 @@ class EndpointServer:
                 if data[0] == 0x00:
                     logger.info(f"[{addr}] Received x00 --- ignoring")
                     data = data[1:]
+                
+                logger.info(f"[{addr}] RAW HEX: {data.hex()}")
+                logger.info(f"[{addr}] RAW BASE64: {base64.b64encode(data).decode()}")
 
                 try:
                     deserialized = deserializer.deserialize(data)
-                    logger.info(f"[{addr}] Deserialized: {deserialized}")
+                    for message in deserialized:
+                        logger.info(f"[{addr}] Message item: {message}")
                 except Exception as e:
                     logger.warning(f"[{addr}] Deserialization failed: {e}")
                     continue
@@ -93,11 +108,61 @@ class EndpointServer:
                     except Exception as e:
                         logger.error(f"[{addr}] Serialization/send failed: {e}")
 
-                    # Simulate uncaught exception to test API 50
-                    # Supposed to be a game ready message (gr)
-                    msg = "gr first second"
-                    logger.info(f"[{addr}] Sending: {msg}")
-                    sock.sendall(msg)
+                    # game ready (gr) message. Contains messageId, serverTime, binaries (config.xml), costTableData, srvTableData (survivor), loginPlayerState.
+                    time.sleep(1)
+
+                    config_path, config_uri = "DeadZone-Private-Server-main/socket_server/config.xml.gz", "xml/config.xml"
+                    buildings_path, buildings_uri = "DeadZone-Private-Server-main/socket_server/buildings.xml.gz", "xml/buildings.xml"
+                    res_second_path, res_second_uri = "DeadZone-Private-Server-main/socket_server/resources_secondary.xml", "xml/resources_secondary.xml"
+                    alliances_path, alliances_uri = "DeadZone-Private-Server-main/socket_server/alliances.xml.gz", "xml/alliances.xml"
+                    
+                    msg = [
+                        "gr", 
+                        time.time(), 
+                        player_data.generate_binaries({
+                            (config_path, config_uri, True),
+                            (buildings_path, buildings_uri, True),
+                            (res_second_path, res_second_uri, False),
+                            (alliances_path, alliances_uri, True),
+                        }), 
+                        player_data.generate_cost_table(), 
+                        player_data.generate_srv_table(),
+                        player_data.generate_login_state(), 
+                    ]
+                    serialized = serializer.serialize(msg)
+                    logger.info(f"[{addr}] Sending: {serialized}")
+                    sock.sendall(serialized)
+                
+                # Client sends auth message after join
+                for message in deserialized:
+                    if isinstance(message, list) and len(message) > 0:
+                        if message[0] == "auth":
+                            token = message[1] if len(message) > 1 else None
+                            logger.info(f"[{addr}] Auth token received: {token}")
+
+                            auth_response = [
+                                "authresult",
+                                json.dumps({
+                                    "playerId": "user123",
+                                    "name": "TestPlayer",
+                                    "level": 5,
+                                    "xp": 1200,
+                                    "resources": {
+                                        "wood": 300,
+                                        "metal": 200,
+                                        "cloth": 100
+                                    },
+                                    "buildings": [],
+                                    "inventory": [],
+                                    "alliance": None
+                                })
+                            ]
+                            try:
+                                serialized = serializer.serialize(auth_response)
+                                logger.info(f"[{addr}] Sending authresult: {serialized}")
+                                sock.sendall(serialized)
+                            except Exception as e:
+                                logger.error(f"[{addr}] Failed to send authresult: {e}")
 
         except Exception as e:
             logger.error(f"[{addr}] Connection error: {e}")

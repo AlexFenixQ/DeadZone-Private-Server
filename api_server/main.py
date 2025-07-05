@@ -1,9 +1,10 @@
-
-from flask import Flask, request, Response, send_from_directory
+from flask import Flask, request, Response, send_from_directory, jsonify
 from flask_cors import CORS
 from proto import auth_pb2
 import logging
 from logging.handlers import RotatingFileHandler
+import base64
+import msgpack
 
 app = Flask(__name__)
 CORS(app)
@@ -27,6 +28,8 @@ if not write_error_logger.handlers:
 
 @app.route("/api/<int:RPCMethod>", methods=["POST"])
 def handle_request(RPCMethod):
+    if RPCMethod == 85:
+        return bigdb_handler()  # ← Вызови напрямую
     request_data = request.get_data()
     app.logger.debug(f"\n{'=' * 45} [/api/{RPCMethod}] {'=' * 45}")
     app.logger.debug(f"Received data of len: {len(request_data)}")
@@ -36,11 +39,42 @@ def handle_request(RPCMethod):
         27: create_join_room,
         601: social_request,
         50: write_error,
+        85: bigdb_handler  # ← ВАЖНО!
     }
 
     handler = handlers.get(RPCMethod, default_handler)
     return handler(request_data) if RPCMethod in handlers else handler()
 
+@app.route("/api/85", methods=["POST"])
+def bigdb_handler():
+    raw = request.get_data()
+
+    # DEBUG — выводим запрос в base64
+    print("BASE64 INPUT:", base64.b64encode(raw).decode())
+
+    # Ты можешь распарсить `raw` как protobuf или msgpack,
+    # но сейчас просто возвращаем заглушку для user123 из PlayerObjects
+    response_obj = {
+        "key": "user123",
+        "table": "PlayerObjects",
+        "properties": {
+            "name": "TestPlayer",
+            "xp": 1234,
+            "level": 6,
+            "resources": {
+                "wood": 100,
+                "metal": 50,
+                "cloth": 20
+            },
+            "buildings": [],
+            "inventory": [],
+            "alliance": None
+        }
+    }
+
+    # ВАЖНО: первый байт \x01, затем msgpack
+    packed = b'\x01' + msgpack.packb(response_obj, use_bin_type=True)
+    return Response(packed, content_type="application/octet-stream")
 
 def authenticate(request_data):
     auth_input = auth_pb2.AuthenticateArgs()
