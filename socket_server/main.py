@@ -1,20 +1,9 @@
 import socket
 import threading
 import logging
-import msgpack
 import serde
 import time
-import json
-import base64
 import player_data
-
-def dict_to_kv_list(d):
-    result = []
-    for k, v in d.items():
-        if isinstance(v, dict):
-            v = dict_to_kv_list(v)
-        result.append([k, v])
-    return result
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("EndpointServer")
@@ -56,7 +45,6 @@ class EndpointServer:
                 logger.error(f"Error accepting connection: {e}")
 
     def handle_client(self, sock, addr):
-        # unpacker = msgpack.Unpacker(raw=False)
         serializer = serde.BinarySerializer()
         deserializer = serde.BinaryDeserializer()
 
@@ -87,6 +75,8 @@ class EndpointServer:
                 except Exception as e:
                     logger.warning(f"[{addr}] Deserialization failed: {e}")
                     continue
+                finally:
+                    deserializer.reset()
 
                 # Client sends join message (from API server)
                 if data.startswith(b'\x87\xc4join\xcedefaultJoinKey'):
@@ -111,58 +101,42 @@ class EndpointServer:
                     # game ready (gr) message. Contains messageId, serverTime, binaries (config.xml), costTableData, srvTableData (survivor), loginPlayerState.
                     time.sleep(1)
 
-                    config_path, config_uri = "DeadZone-Private-Server-main/socket_server/config.xml.gz", "xml/config.xml"
-                    buildings_path, buildings_uri = "DeadZone-Private-Server-main/socket_server/buildings.xml.gz", "xml/buildings.xml"
-                    res_second_path, res_second_uri = "DeadZone-Private-Server-main/socket_server/resources_secondary.xml", "xml/resources_secondary.xml"
-                    alliances_path, alliances_uri = "DeadZone-Private-Server-main/socket_server/alliances.xml.gz", "xml/alliances.xml"
+                    config_files = {
+                        ("../file_server/static/data/xml/alliances.xml.gz", "xml/alliances.xml", True),
+                        ("../file_server/static/data/xml/arenas.xml.gz", "xml/arenas.xml", True),
+                        ("../file_server/static/data/xml/badwords.xml.gz", "xml/badwords.xml", True),
+                        ("../file_server/static/data/xml/buildings.xml.gz", "xml/buildings.xml", True),
+                        ("../file_server/static/data/xml/config.xml.gz", "xml/config.xml", True),
+                        ("../file_server/static/data/xml/crafting.xml.gz", "xml/crafting.xml", True),
+                        ("../file_server/static/data/xml/effects.xml.gz", "xml/effects.xml", True),
+                        ("../file_server/static/data/xml/humanenemies.xml.gz", "xml/humanenemies.xml", True),
+                        ("../file_server/static/data/xml/injury.xml.gz", "xml/injury.xml", True),
+                        ("../file_server/static/data/xml/itemmods.xml.gz", "xml/itemmods.xml", True),
+                        ("../file_server/static/data/xml/items.xml.gz", "xml/items.xml", True),
+                        ("../file_server/static/data/xml/quests.xml.gz", "xml/quests.xml", True),
+                        ("../file_server/static/data/xml/quests_global.xml.gz", "xml/quests_global.xml", True),
+                        ("../file_server/static/data/xml/raids.xml.gz", "xml/raids.xml", True),
+                        ("../file_server/static/data/xml/skills.xml.gz", "xml/skills.xml", True),
+                        ("../file_server/static/data/xml/streetstructs.xml.gz", "xml/streetstructs.xml", True),
+                        ("../file_server/static/data/xml/survivor.xml.gz", "xml/survivor.xml", True),
+                        ("../file_server/static/data/xml/vehiclenames.xml.gz", "xml/vehiclenames.xml", True),
+                        ("../file_server/static/data/xml/zombie.xml.gz", "xml/zombie.xml", True),
+                        ("../file_server/static/data/resources_secondary.xml", "xml/resources_secondary.xml", False), # Uncompressed and a pure XML by default
+                        ("../file_server/static/data/xml/attire.xml", "xml/attire.xml", False), # Must be pure a pure uncompressed XML
+                    }
                     
                     msg = [
                         "gr", 
                         time.time(), 
-                        player_data.generate_binaries({
-                            (config_path, config_uri, True),
-                            (buildings_path, buildings_uri, True),
-                            (res_second_path, res_second_uri, False),
-                            (alliances_path, alliances_uri, True),
-                        }), 
+                        player_data.generate_binaries(config_files), 
                         player_data.generate_cost_table(), 
                         player_data.generate_srv_table(),
                         player_data.generate_login_state(), 
                     ]
                     serialized = serializer.serialize(msg)
-                    logger.info(f"[{addr}] Sending: {serialized}")
+                    # Commented for now because message is so long. Need to refactor for logging.
+                    # logger.info(f"[{addr}] Sending: {serialized}")
                     sock.sendall(serialized)
-                
-                # Client sends auth message after join
-                for message in deserialized:
-                    if isinstance(message, list) and len(message) > 0:
-                        if message[0] == "auth":
-                            token = message[1] if len(message) > 1 else None
-                            logger.info(f"[{addr}] Auth token received: {token}")
-
-                            auth_response = [
-                                "authresult",
-                                json.dumps({
-                                    "playerId": "user123",
-                                    "name": "TestPlayer",
-                                    "level": 5,
-                                    "xp": 1200,
-                                    "resources": {
-                                        "wood": 300,
-                                        "metal": 200,
-                                        "cloth": 100
-                                    },
-                                    "buildings": [],
-                                    "inventory": [],
-                                    "alliance": None
-                                })
-                            ]
-                            try:
-                                serialized = serializer.serialize(auth_response)
-                                logger.info(f"[{addr}] Sending authresult: {serialized}")
-                                sock.sendall(serialized)
-                            except Exception as e:
-                                logger.error(f"[{addr}] Failed to send authresult: {e}")
 
         except Exception as e:
             logger.error(f"[{addr}] Connection error: {e}")
